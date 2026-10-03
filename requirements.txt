@@ -1,0 +1,19 @@
+# indic-rag-evals has NO required third-party dependencies.
+# The core path -- chunking, BM25 + char-gram indexes, hybrid fusion,
+# extractive generation, metrics, the CLI and the whole unittest suite --
+# runs on the Python 3 standard library alone (developed on Python 3.14).
+#
+# Lines below are optional and commented out on purpose. The code imports
+# them lazily and raises a clear "pip install <pkg>" error if you enable a
+# feature without them.
+
+# --- optional: dense retrieval (only for `--strategies hybrid+dense`) ---
+# sentence-transformers>=2.7
+
+# --- optional: LLM generation (only for `--generator llm`) ---
+# requests>=2.31
+
+# --- optional: dev tooling (the tests use stdlib unittest, not pytest) ---
+# pytest>=8.0
+# ruff>=0.6
+# mypy>=1.11
