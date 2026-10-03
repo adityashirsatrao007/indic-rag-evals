@@ -10,8 +10,9 @@ supported and both flow through the same scorer:
 * ``tokenize_char_grams`` -- padded character 3-grams, robust to typos,
                              missing matras and code-mixed transliteration.
 
-BM25 uses k1 = 1.5 and b = 0.75, the values reported in the original
-TREC-era tuning and used as Lucene/Elasticsearch defaults.
+BM25 uses k1 = 1.5 and b = 0.75, the defaults of the reference Okapi
+implementations (rank_bm25, gensim); Lucene/Elasticsearch ship k1 = 1.2 with
+the same b = 0.75.
 """
 
 from __future__ import annotations
@@ -128,13 +129,11 @@ class BM25Index:
         self.b = float(b)
         self._doc_len: dict[str, int] = {}
         self._postings: dict[str, dict[str, int]] = defaultdict(dict)
-        self._tf: dict[str, Counter[str]] = {}
 
         for doc_id, terms in documents.items():
             tokens = list(terms)
             self._doc_len[doc_id] = len(tokens)
-            self._tf[doc_id] = Counter(tokens)
-            for term, count in self._tf[doc_id].items():
+            for term, count in Counter(tokens).items():
                 self._postings[term][doc_id] = count
 
         self._n = len(self._doc_len)
@@ -142,11 +141,6 @@ class BM25Index:
         self._idf_cache: dict[str, float] = {}
 
     # -- introspection -------------------------------------------------
-    @property
-    def doc_ids(self) -> list[str]:
-        """Indexed document ids in insertion order."""
-        return list(self._doc_len)
-
     @property
     def avgdl(self) -> float:
         """Average document length in tokens."""
@@ -162,7 +156,14 @@ class BM25Index:
         return len(self._postings.get(term, ()))
 
     def idf(self, term: str) -> float:
-        """Robertson/Sparck-Jones idf, kept positive (standard BM25 variant)."""
+        """Robertson/Sparck-Jones idf in Lucene's positive ``log(1 + ...)`` form.
+
+        The textbook ``log((N - df + 0.5) / (df + 0.5))`` turns negative once a
+        term occurs in more than half the corpus, which would flip the sign of
+        every score containing it; the ``+ 1`` inside the log (what Lucene
+        indexes) keeps idf strictly positive, so matching a near-universal
+        term can only add to a document's score, never subtract from it.
+        """
         cached = self._idf_cache.get(term)
         if cached is not None:
             return cached
@@ -172,14 +173,13 @@ class BM25Index:
         return value
 
     # -- scoring -------------------------------------------------------
-    def score(
-        self, query: Sequence[str], *, min_score: float = 0.0
-    ) -> dict[str, float]:
-        """Score every document against *query* terms.
+    def score(self, query: Sequence[str]) -> dict[str, float]:
+        """Score every document that matches at least one *query* term.
 
-        Returns ``doc_id -> score`` for documents scoring strictly above
-        *min_score*.  Repeated query terms weight a term proportionally,
-        which matches Lucene's behaviour for repeated query terms.
+        BM25 is strictly positive here (see :meth:`idf`), so documents that
+        match nothing are simply absent from the result rather than present
+        with 0.0.  Repeated query terms are summed per occurrence, which
+        matches Lucene's behaviour for repeated query terms.
         """
         scores: dict[str, float] = {}
         if self._n == 0:
@@ -197,8 +197,6 @@ class BM25Index:
                 scores[doc_id] = scores.get(doc_id, 0.0) + idf * tf * (
                     self.k1 + 1.0
                 ) / denom
-        if min_score:
-            scores = {k: v for k, v in scores.items() if v > min_score}
         return scores
 
     def top_k(self, query: Sequence[str], k: int = 5) -> list[tuple[str, float]]:
@@ -207,12 +205,6 @@ class BM25Index:
             return []
         ranked = sorted(self.score(query).items(), key=lambda kv: (-kv[1], kv[0]))
         return ranked[:k]
-
-    def rank(self, query: Sequence[str]) -> list[str]:
-        """Doc ids sorted by descending score (zero-score docs excluded)."""
-        if self._n == 0:
-            return []
-        return [doc_id for doc_id, _ in self.top_k(query, k=self._n)]
 
     # -- helpers -------------------------------------------------------
     @classmethod

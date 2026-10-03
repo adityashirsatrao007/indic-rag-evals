@@ -9,7 +9,7 @@ network, no `pip install` required to reproduce every number on this page.
 
 ---
 
-## Why this exists
+## The 92% problem
 
 I already have a RAG project that reports a **"92% hit-rate."** That number was
 eyeballed from a demo: no labelled query set, no stated metric, no definition of
@@ -56,7 +56,7 @@ attached to its top hit.
 ## Reproduce it (3 commands)
 
 ```bash
-# 1. the test suite (stdlib unittest, 90 tests)
+# 1. the test suite (stdlib unittest, 96 tests)
 cd indic-rag-evals && PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 # 2. the full evaluation -> results/metrics.csv + results/report.md
@@ -116,7 +116,7 @@ per-component scores:
 $ PYTHONPATH=src python3 -m unittest discover -s tests -v
 ...
 ----------------------------------------------------------------------
-Ran 90 tests in 0.672s
+Ran 96 tests in 0.783s
 
 OK
 ```
@@ -125,7 +125,7 @@ OK
 
 ---
 
-## Reading the numbers honestly
+## Per-query breakdown
 
 Per-query detail for the `hybrid` strategy (the same table is written for every
 strategy in `results/report.md`):
@@ -262,6 +262,7 @@ indic-rag-evals/
 │   └── eval/qa.jsonl       12 labelled queries (Hindi, Marathi, code-mixed)
 ├── src/rageval/            chunking · bm25 · retrieval · generation · metrics · cli
 ├── tests/                  test_chunking · test_bm25 · test_metrics · test_cli
+│                           · test_generation
 └── results/                metrics.csv + report.md (regenerated, git-ignored)
 ```
 
@@ -271,7 +272,7 @@ a claim of authoritative coverage.
 
 ---
 
-## Limits (read before quoting any number above)
+## Limits
 
 - **Tiny eval set.** 12 queries, 6 documents, one author. These are regression
   numbers, not a benchmark, and the confidence interval on a 12-sample mean is
@@ -303,33 +304,31 @@ a claim of authoritative coverage.
 
 ---
 
-## How this maps to a "Data Scientist – Evaluations" role (Sarvam)
+## What this maps to
 
-Sarvam's product surface is Indic speech, LLMs and vision — evaluation work there
-is mostly *building the measurement*, not running a leaderboard. This repo is a
-small but complete instance of that:
+Sarvam's product surface is Indic speech, LLMs and vision, and evaluation work
+there is mostly *building the measurement*, not running a leaderboard — which is
+the muscle this repo exercises:
 
-1. **Labelled sets over vibes.** Queries in Hindi, Marathi and code-mixed
-   English/Hindi, gold document ids, and gold answer spans — including
-   multi-document items, so metrics behave differently from the single-hop
-   happy path.
-2. **Metric definitions written down.** Recall@k / MRR / token-F1 / exact match
-   are implemented explicitly (not imported from a black box) and each has
-   hand-computed test vectors, because an evaluation team has to be able to
-   argue about what a number *means*.
-3. **Indic-specific normalisation.** Danda handling, matra-preserving
-   tokenisation, case/whitespace folding — plus a real bug found and fixed by
-   testing the tokenizer against Devanagari (`\w` drops combining marks).
-4. **Failure taxonomy, not averages.** The report is per-query: you can see
-   whether a regression is a ranking miss, a sentence-selection miss, or a
-   script-mismatch miss, and only then decide what to change.
-5. **Reproducibility as a feature.** Stdlib-only, deterministic (the test suite
-   asserts two runs produce byte-identical `metrics.csv`), no secrets, no
-   network — the sort of harness that can sit in CI and gate a model or
-   prompt change.
-6. **Honest optional scale-out.** Dense vectors and an LLM judge/generator are
-   behind guarded imports with `pip install …` errors, so the harness degrades
-   gracefully on a locked-down machine instead of pretending to be complete.
+- **Labelled sets, not vibes.** Twelve queries across Hindi, Marathi and
+  code-mixed English/Hindi, with gold document ids and gold answer spans,
+  including multi-document items where single-hop metrics would lie to you.
+- **Metrics you can argue about.** Recall@k, MRR, token-F1 and exact match are
+  implemented explicitly rather than imported from a black box, each with
+  hand-computed test vectors — a harness is only worth something if people
+  trust what the number means.
+- **A failure taxonomy, not an average.** The report is per-query: a regression
+  is a ranking miss, a sentence-selection miss, or a script-mismatch miss, and
+  those three need different fixes.
+- **CI-shaped reproducibility.** Stdlib-only, deterministic (the suite asserts
+  two runs produce byte-identical `metrics.csv`), no secrets, no network — the
+  kind of harness that can gate a prompt or model change on every commit.
+
+Indic-specific normalisation (danda handling, matra-preserving tokenisation)
+and guarded optional scale-out (dense vectors, an LLM generator behind
+`pip install …` errors) round it off. The Devanagari tokenizer bug — `\w`
+drops combining marks, so `मराठी` silently became `मर`+`ठ` — was found the
+honest way: testing the tokenizer against real Hindi text instead of trusting it.
 
 ---
 
@@ -343,6 +342,8 @@ tests/test_bm25.py       Devanagari tokenisation, ranking sanity, idf, typo
 tests/test_metrics.py    Recall@k, MRR, token-F1, EM with hand-computed values
 tests/test_cli.py        end-to-end CLI into temp dirs, artifact checks,
                          determinism of two runs, error exit codes
+tests/test_generation.py extractive scoring arithmetic, answer selection,
+                         LLM config precedence and guarded-error paths
 ```
 
 ```bash

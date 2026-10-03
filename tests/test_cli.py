@@ -67,12 +67,25 @@ class EvaluateCliTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual([row["strategy"] for row in rows],
                              ["bm25", "char-gram", "hybrid"])
+
+            # Regression baseline: these are the numbers committed in
+            # results/metrics.csv.  Asserting them (rather than just "0 <= x
+            # <= 1") is what makes a broken retriever or metric fail here --
+            # an empty ranking would still satisfy a range check.
+            golden = {
+                #                        R@1     R@3  R@5  MRR     F1      EM
+                "bm25":      (0.8333, 1.0, 1.0, 0.9444, 0.7965, 0.75),
+                "char-gram": (0.9167, 1.0, 1.0, 1.0,    0.7746, 0.75),
+                "hybrid":    (0.8333, 1.0, 1.0, 0.9583, 0.7965, 0.75),
+            }
+            columns = ("recall@1", "recall@3", "recall@5", "mrr",
+                       "token_f1", "exact_match")
             for row in rows:
-                for column in ("recall@1", "recall@3", "recall@5", "mrr",
-                               "token_f1", "exact_match"):
-                    value = float(row[column])
-                    self.assertGreaterEqual(value, 0.0, column)
-                    self.assertLessEqual(value, 1.0, column)
+                for column, expected in zip(columns, golden[row["strategy"]]):
+                    self.assertAlmostEqual(
+                        float(row[column]), expected, places=4,
+                        msg=f"{row['strategy']} {column}",
+                    )
                 self.assertEqual(int(row["n_queries"]), 12)
 
             report = report_path.read_text(encoding="utf-8")
@@ -150,6 +163,11 @@ class SearchCliTests(unittest.TestCase):
             self.assertIn("score", proc.stdout)
             self.assertIn("mr-solapur", proc.stdout)
             self.assertIn("6 docs", proc.stdout)
+            # the city must be rank 1, not merely somewhere in the top-k
+            top_row = next(
+                line for line in proc.stdout.splitlines() if line.startswith("| 1 ")
+            )
+            self.assertIn("mr-solapur", top_row)
 
     def test_search_with_explain_shows_components(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -233,6 +251,19 @@ class InProcessErrorTests(unittest.TestCase):
                 "--docs", str(DOCS),
                 "--qrels", str(QRELS),
                 "--out", str(blocker),
+            ])
+        self.assertEqual(code, 2)
+
+    def test_blank_strategy_name_returns_exit_code_two(self) -> None:
+        # "--strategies ''" would otherwise evaluate nothing and write an
+        # empty metrics.csv without complaining
+        with tempfile.TemporaryDirectory() as tmp:
+            code = self._run_in_process([
+                "evaluate",
+                "--docs", str(DOCS),
+                "--qrels", str(QRELS),
+                "--out", str(Path(tmp) / "out"),
+                "--strategies", " , ",
             ])
         self.assertEqual(code, 2)
 

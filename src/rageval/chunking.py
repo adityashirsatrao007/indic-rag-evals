@@ -2,7 +2,7 @@
 
 Hindi and Marathi text is written in Devanagari, which uses the danda
 (``।``, U+0964) as its full stop and does not put spaces around it in the
-same way English does around ``.``.  Naive ``text.split(".  ")`` therefore
+same way English does around ``.``.  Naive ``text.split(". ")`` therefore
 breaks Indic text badly.  This module splits on whitespace runs that follow
 a sentence terminator, keeps digits such as ``10,372`` or ``2024.5`` intact,
 and produces overlapping chunks suitable for a retrieval index.
@@ -18,6 +18,7 @@ __all__ = [
     "Chunk",
     "chunk_document",
     "chunk_text",
+    "iter_chunks",
     "load_documents",
     "split_paragraphs",
     "split_sentences",
@@ -44,9 +45,6 @@ class Chunk:
     text: str
     index: int
     sentences: tuple[str, ...]
-
-    def __str__(self) -> str:  # pragma: no cover - convenience only
-        return f"{self.chunk_id}: {self.text[:60]}"
 
 
 @dataclass(frozen=True)
@@ -154,7 +152,9 @@ def chunk_text(
                 break
             overlap += candidate
             carry_start -= 1
-        start = carry_start if carry_start > start else start + 1
+        # The loop stops at start + 1 at the lowest, so carry_start is always
+        # > start and every iteration strictly advances (no infinite loop).
+        start = carry_start
 
     return chunks
 

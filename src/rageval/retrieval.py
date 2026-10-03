@@ -21,7 +21,7 @@ from .bm25 import (
     tokenize,
     tokenize_char_grams,
 )
-from .chunking import Chunk, Document, chunk_document, load_documents
+from .chunking import Chunk, Document, iter_chunks
 
 __all__ = [
     "DenseEncoder",
@@ -30,7 +30,6 @@ __all__ = [
     "Retriever",
     "ScoredDoc",
     "Strategy",
-    "build_retriever",
     "cosine",
     "fuse_rrf",
     "fuse_weighted",
@@ -98,10 +97,6 @@ class ScoredDoc:
     rank: int
     chunk_id: str | None = None
     title: str = ""
-
-    def as_tuple(self) -> tuple[str, float]:
-        """``(doc_id, score)`` -- the shape score fusion functions expect."""
-        return self.doc_id, self.score
 
 
 @dataclass(frozen=True)
@@ -180,7 +175,12 @@ def fuse_rrf(
 
     Only documents with a strictly positive score in a component take part in
     that component's ranking, so a component that found nothing cannot promote
-    documents it never matched.  ``constant`` is the standard RRF *k* = 60.
+    documents it never matched.
+
+    ``constant`` is the RRF *k*: it flattens the rank axis, so being #1 rather
+    than #2 in one list is worth only a little -- one noisy ranker cannot
+    outvote the others on its own.  60 is the value Cormack et al. (SIGIR 2009)
+    tuned and that has been the default ever since.
     """
     resolved = _check_weights(score_maps, weights)
     fused: dict[str, float] = {}
@@ -199,7 +199,7 @@ def fuse_weighted(
     *,
     weights: Sequence[float] | None = None,
 ) -> dict[str, float]:
-    """Min-max normalised, weighted-sum fusion of several score maps.
+    """Per-component max scaling, then a weighted sum over score maps.
 
     Each component is scaled by its own maximum score, which puts BM25
     (unbounded) and cosine similarity (``[-1, 1]``) on one scale.
@@ -284,13 +284,9 @@ class Retriever:
         self.gram_n = gram_n
         self.weights = list(weights) if weights is not None else None
 
-        self.chunks: list[Chunk] = []
-        for document in documents:
-            self.chunks.extend(
-                chunk_document(
-                    document, max_chars=max_chars, overlap_chars=overlap_chars
-                )
-            )
+        self.chunks: list[Chunk] = iter_chunks(
+            documents, max_chars=max_chars, overlap_chars=overlap_chars
+        )
         chunk_texts = {chunk.chunk_id: chunk.text for chunk in self.chunks}
         self._chunk_to_doc = {chunk.chunk_id: chunk.doc_id for chunk in self.chunks}
         self._doc_chunks: dict[str, list[str]] = {}
@@ -303,7 +299,9 @@ class Retriever:
         self._dense = dense_encoder
         self._dense_vectors: list[list[float]] | None = None
         if self._dense is not None:
-            self._dense_vectors = self._dense.encode([t for t in chunk_texts.values()])
+            # encode in self.chunks order: _component() zips this list with
+            # self.chunks, so the two must line up index for index.
+            self._dense_vectors = self._dense.encode([c.text for c in self.chunks])
 
     # -- component scores ---------------------------------------------
     @staticmethod
@@ -369,9 +367,10 @@ class Retriever:
         for name in self.strategy.components:
             scores, best_chunks = self._component(name, query)
             maps.append(scores)
+            # _rollup returns the same keys in both maps; the first component
+            # of the strategy owns the snippet that gets shown for a document.
             for doc_id, chunk_id in best_chunks.items():
-                if doc_id in scores:
-                    best.setdefault(doc_id, chunk_id)
+                best.setdefault(doc_id, chunk_id)
 
         fused = self._combine(maps)
         ranked = sorted(
@@ -407,27 +406,6 @@ class Retriever:
             if chunk.chunk_id == chunk_id:
                 return chunk.text
         return ""
-
-
-def build_retriever(
-    docs_path: str,
-    *,
-    strategy: "str | Strategy" = Strategy.BM25,
-    fusion: str = "rrf",
-    dense: bool = False,
-    **kwargs: object,
-) -> Retriever:
-    """Load documents from *docs_path* and build a :class:`Retriever`.
-
-    With ``dense=True`` (or ``strategy='hybrid+dense'``) a
-    :class:`DenseEncoder` is constructed, raising
-    :class:`MissingDependencyError` if sentence-transformers is not installed.
-    """
-    documents = load_documents(docs_path)
-    encoder: DenseEncoder | None = None
-    if dense or Strategy.parse(strategy).uses_dense:
-        encoder = DenseEncoder()
-    return Retriever(documents, strategy=strategy, fusion=fusion, dense_encoder=encoder, **kwargs)  # type: ignore[arg-type]
 
 
 def iter_document_languages(documents: Iterable[Document]) -> list[str]:

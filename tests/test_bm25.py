@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -66,7 +67,8 @@ class BM25IndexTests(unittest.TestCase):
 
     def test_size_and_avgdl(self) -> None:
         self.assertEqual(self.index.size, 3)
-        self.assertGreater(self.index.avgdl, 0)
+        # (9 + 7 + 8) tokens / 3 documents
+        self.assertEqual(self.index.avgdl, 8.0)
 
     def test_rare_term_ranks_matching_document_first(self) -> None:
         top = self.index.top_k(tokenize("मानसून कब आता है"), k=3)
@@ -81,7 +83,9 @@ class BM25IndexTests(unittest.TestCase):
 
     def test_idf_is_positive_and_frequency_aware(self) -> None:
         self.assertGreater(self.index.idf("मानसून"), 0.0)
-        # "में" style commonality: a term in every doc has lower idf.
+        # hand value for df=1 in a 3-doc corpus: log(1 + (N - df + .5)/(df + .5))
+        self.assertAlmostEqual(self.index.idf("मानसून"), math.log(1.0 + 2.5 / 1.5))
+        # a term shared by every document carries far less weight
         shared = BM25Index({"x": ["का"], "y": ["का"]})
         self.assertGreater(shared.idf("का"), 0.0)
         self.assertLess(shared.idf("का"), self.index.idf("मानसून"))
@@ -138,15 +142,21 @@ class CharGramRobustnessTests(unittest.TestCase):
 
 class FusionTests(unittest.TestCase):
     def test_rrf_rewards_documents_ranked_high_by_both_components(self) -> None:
+        # "a" is #1 in both lists -> 1/61 + 1/61 ; "b" is #2 in both -> 2/62
         fused = fuse_rrf([{"a": 10.0, "b": 5.0}, {"a": 0.9, "b": 0.2}])
+        self.assertAlmostEqual(fused["a"], 2.0 / 61.0)
+        self.assertAlmostEqual(fused["b"], 2.0 / 62.0)
         self.assertGreater(fused["a"], fused["b"])
 
     def test_rrf_ignores_zero_scores(self) -> None:
         fused = fuse_rrf([{"a": 1.0, "b": 0.0}])
         self.assertNotIn("b", fused)
+        self.assertAlmostEqual(fused["a"], 1.0 / 61.0)  # "a" alone is rank 1
 
     def test_rrf_weights(self) -> None:
         fused = fuse_rrf([{"a": 1.0}, {"b": 1.0}], weights=[10.0, 1.0])
+        self.assertAlmostEqual(fused["a"], 10.0 / 61.0)
+        self.assertAlmostEqual(fused["b"], 1.0 / 61.0)
         self.assertGreater(fused["a"], fused["b"])
 
     def test_weighted_sum_normalises_per_component(self) -> None:

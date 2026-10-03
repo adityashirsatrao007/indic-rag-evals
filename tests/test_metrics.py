@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -48,10 +49,10 @@ class TokenF1Tests(unittest.TestCase):
         self.assertEqual(token_f1("यूपीआई कैसे काम करता है?", "यूपीआई कैसे काम करता है।"), 1.0)
         self.assertEqual(token_f1("UPI भुगतान", "upi भुगतान"), 1.0)
 
-    def test_partial_overlap_is_between_zero_and_one(self) -> None:
+    def test_partial_overlap_f1_is_hand_computed(self) -> None:
+        # 2 shared tokens out of 5 predicted and 5 gold -> P = R = 0.4 -> F1
         score = token_f1("मानसून जून में आता है", "मानसून सितंबर तक चलता है")
-        self.assertGreater(score, 0.0)
-        self.assertLess(score, 1.0)
+        self.assertAlmostEqual(score, 0.4)
 
     def test_disjoint_texts_score_zero(self) -> None:
         self.assertEqual(token_f1("सोलापूर जिल्हा", "भारत में मानसून"), 0.0)
@@ -64,6 +65,12 @@ class TokenF1Tests(unittest.TestCase):
 class ExactMatchTests(unittest.TestCase):
     def test_match_after_normalisation(self) -> None:
         self.assertEqual(exact_match("  उत्तर:  मराठी. ", "उत्तर मराठी"), 1.0)
+        # decomposed (NFD) input must still match its composed gold form --
+        # the same NFC folding the retrieval tokenizer applies
+        composed = chr(0x0958) + "मल"  # क़मल, क़ has a canonical decomposition
+        decomposed = unicodedata.normalize("NFD", composed)
+        self.assertNotEqual(decomposed, composed)
+        self.assertEqual(exact_match(decomposed, composed), 1.0)
 
     def test_mismatch(self) -> None:
         self.assertEqual(exact_match("देवनागरी", "लैटिन"), 0.0)
@@ -150,7 +157,8 @@ class AggregationTests(unittest.TestCase):
             query_ids=["q1"],
         )
         self.assertIsNotNone(result.token_f1)
-        self.assertGreater(result.token_f1, 0.0)
+        # 3 predicted tokens all inside 5 gold tokens -> P=1, R=0.6, F1=0.75
+        self.assertAlmostEqual(result.token_f1, 0.75)
         self.assertEqual(result.exact_match, 0.0)
         self.assertEqual(result.per_query[0].query_id, "q1")
         self.assertEqual(result.per_query[0].ranked_doc_ids, ("a",))
@@ -158,6 +166,9 @@ class AggregationTests(unittest.TestCase):
     def test_length_mismatch_raises(self) -> None:
         with self.assertRaises(ValueError):
             evaluate_rankings("bm25", [["a"]], [["a"], ["b"]])
+        # a misaligned query_ids list would otherwise be zipped away silently
+        with self.assertRaises(ValueError):
+            evaluate_rankings("bm25", [["a"]], [["a"]], query_ids=["q1", "q2"])
 
     def test_prediction_alignment_is_checked(self) -> None:
         with self.assertRaises(ValueError):
@@ -168,6 +179,9 @@ class AggregationTests(unittest.TestCase):
                 predictions=[],
                 gold_answers=["x"],
             )
+        # one side only: the answer metrics would be dropped without a word
+        with self.assertRaises(ValueError):
+            evaluate_rankings("bm25", [["a"]], [["a"]], predictions=["x"])
 
 
 if __name__ == "__main__":  # pragma: no cover

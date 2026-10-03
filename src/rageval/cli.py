@@ -1,7 +1,8 @@
 """Command line interface: ``evaluate`` and ``search`` subcommands.
 
 Run as ``python3 -m rageval ...`` from the repository root (or anywhere, with
-``PYTHONPATH=src``).  Every command is offline and deterministic.
+``PYTHONPATH=src``).  Everything is offline; the metrics a run reports are
+deterministic (only the report's "generated" timestamp varies between runs).
 """
 
 from __future__ import annotations
@@ -68,6 +69,12 @@ def _parse_strategies(values: Sequence[str] | None) -> list[Strategy]:
         for item in str(raw).split(","):
             if item.strip():
                 parsed.append(Strategy.parse(item))
+    if not parsed:
+        raise ValueError(
+            "no strategy given (choose from "
+            + ", ".join(s.value for s in Strategy)
+            + ")"
+        )
     return list(dict.fromkeys(parsed))  # de-duplicate, keep order
 
 
@@ -102,6 +109,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     encoder = DenseEncoder() if needs_dense else None
 
     k_values = DEFAULT_K_VALUES
+    # Recall@k needs k retrieved documents even when --top-k asks for fewer,
+    # so the per-query depth is the largest k we report on.
     depth = max(args.top_k, max(k_values))
     results: list[StrategyMetrics] = []
 
@@ -181,7 +190,10 @@ def cmd_search(args: argparse.Namespace) -> int:
     )
     hits = retriever.search(args.query, top_k=args.top_k)
 
-    print(f"strategy: {strategy.value}   fusion: {args.fusion}   corpus: {len(documents)} docs / {len(retriever.chunks)} chunks")
+    print(
+        f"strategy: {strategy.value}   fusion: {args.fusion}   "
+        f"corpus: {len(documents)} docs / {len(retriever.chunks)} chunks"
+    )
     if not hits:
         print("no results (no indexed term matched the query)")
         return 0
@@ -285,10 +297,10 @@ def _write_report(
             "  averaged over all queries; `mrr` = mean of 1/rank of the first hit.",
             "- `token_f1` / `exact_match` compare the generated answer with the",
             "  reference answer after normalising case, whitespace and Devanagari",
-            "  punctuation (danda). They are `""` when `--generator none`.",
-            "- Caveats: the corpus is 6 hand-written documents and the eval set has",
-            "  12 queries, so Recall@5 saturates easily and the numbers are a",
-            "  regression baseline, not a benchmark.",
+            "  punctuation (danda). They are `\"\"` when `--generator none`.",
+            "- Caveats: the corpus and eval set above are small, so Recall@5",
+            "  saturates easily and the numbers are a regression baseline,",
+            "  not a benchmark.",
             "",
         ]
     )
@@ -311,7 +323,12 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--docs", required=True, help="corpus directory or file")
     evaluate.add_argument("--qrels", required=True, help="labelled qa.jsonl file")
     evaluate.add_argument("--out", required=True, help="output directory")
-    evaluate.add_argument("--top-k", type=int, default=5, help="results kept per query")
+    evaluate.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="results retrieved per query (floored at 5 so Recall@5 is computable)",
+    )
     evaluate.add_argument(
         "--strategies",
         action="append",
@@ -324,7 +341,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--generator", choices=GENERATORS, default="extractive", help="answer generator"
     )
-    evaluate.add_argument("--sentences", type=int, default=1, help="sentences per extractive answer")
+    evaluate.add_argument(
+        "--sentences", type=int, default=1, help="sentences per extractive answer"
+    )
     evaluate.add_argument("--max-chars", type=int, default=480, help="chunk size budget")
     evaluate.add_argument("--overlap", type=int, default=120, help="chunk overlap budget")
     evaluate.set_defaults(func=cmd_evaluate)

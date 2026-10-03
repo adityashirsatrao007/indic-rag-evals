@@ -45,10 +45,12 @@ def score_sentences(
 ) -> list[tuple[int, float]]:
     """Score sentences for *query*; returns ``[(index, score)]`` descending.
 
-    A sentence's score is the summed idf of the distinct query tokens it
-    contains, divided by ``sqrt(token count)`` so that long, rambling
-    sentences do not win on length alone.  Ties keep the original order
-    (earlier sentence first), which makes the output deterministic.
+    A sentence's score is the summed idf of the query tokens it contains,
+    divided by the square root of the sentence's distinct-token count, so
+    that long, rambling sentences do not win on length alone (distinct
+    tokens, not raw counts, keep the denominator about content rather than
+    repeated words).  Ties keep the original order (earlier sentence first),
+    which makes the output deterministic.
     """
     query_terms = list(dict.fromkeys(tokenize(query)))
     weight = idf or (lambda _term: 1.0)
@@ -106,10 +108,12 @@ def resolve_llm_config(
 ) -> tuple[str, str, str]:
     """Resolve ``(api_key, base_url, model)`` from arguments and environment.
 
-    Precedence: explicit argument, then ``SARVAM_*`` variable, then the
-    generic ``LLM_*`` variable, then a documented default for the base URL
-    and model.  Raises ``ValueError`` with every variable named when the API
-    key is missing.
+    An explicit argument always wins.  Of the environment variables the API
+    key prefers ``SARVAM_API_KEY`` over ``LLM_API_KEY``, while the base URL
+    and model prefer their ``LLM_*`` name over ``SARVAM_API_BASE``/
+    ``SARVAM_MODEL``; the base URL and model then fall back to documented
+    defaults.  Raises ``ValueError`` naming every variable when the API key
+    is missing.
     """
     resolved_key = (
         api_key
@@ -234,7 +238,12 @@ def _build_context(
     *,
     limit: int = 1500,
 ) -> str:
-    """Join the top documents' text into one bounded context string."""
+    """Join the top documents' text into one context string under *limit*.
+
+    The budget is soft on purpose: the first hit is always taken whole (a
+    truncated first document is worse than slightly overshooting), then
+    further documents are added only while they fit.
+    """
     by_id = {doc.doc_id: doc for doc in documents}
     parts: list[str] = []
     used = 0

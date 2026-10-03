@@ -5,12 +5,13 @@ Answer quality: token-F1 and exact match against the reference answer.
 
 Text normalisation is Devanagari aware: the danda (``।``), double danda,
 Latin punctuation and case differences are all stripped before comparison,
-so ``"क्यूआर कोड स्कैन करके भुगतान।"`` and ``"क्यूआर कोड स्कैन करके भुगतान"`
+so ``"क्यूआर कोड स्कैन करके भुगतान।"`` and ``"क्यूआर कोड स्कैन करके भुगतान"``
 score as an exact match.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
@@ -31,7 +32,7 @@ __all__ = [
 
 
 def normalize(text: str) -> str:
-    """Lowercase, drop punctuation, collapse whitespace (unicode-safe).
+    """NFC-fold, lowercase, drop punctuation, collapse whitespace (unicode-safe).
 
     Uses the same word-character definition as the tokenizer (letters, digits
     and combining marks from any script), so Devanagari matras survive while
@@ -44,7 +45,10 @@ def normalize(text: str) -> str:
     """
     parts: list[str] = []
     buffer: list[str] = []
-    for char in text.lower():
+    # NFC first, exactly like rageval.bm25.normalize: a decomposed ("NFD")
+    # prediction -- e.g. text copied from macOS -- must still compare equal to
+    # its composed gold form, which is the form retrieval indexed.
+    for char in unicodedata.normalize("NFC", text).lower():
         if is_word_char(char):
             buffer.append(char)
         elif buffer:
@@ -180,12 +184,17 @@ def evaluate_rankings(
 ) -> StrategyMetrics:
     """Aggregate per-query rankings (and optionally predictions) into metrics.
 
-    ``predictions``/``gold_answers`` are optional: when omitted the answer
-    columns stay ``None`` and the CSV writes an empty cell, which is how the
-    harness reports ``--generator none`` runs.
+    ``predictions``/``gold_answers`` are optional but come as a pair: when
+    both are omitted the answer columns stay ``None`` and the CSV writes an
+    empty cell, which is how the harness reports ``--generator none`` runs.
     """
     if len(rankings) != len(qrels):
         raise ValueError("rankings and qrels must align")
+    if query_ids is not None and len(query_ids) != len(rankings):
+        raise ValueError("query_ids must align with rankings")
+    if (predictions is None) != (gold_answers is None):
+        # supplying only one side would silently skip answer scoring
+        raise ValueError("predictions and gold_answers must be supplied together")
     ids = list(query_ids) if query_ids else [str(i + 1) for i in range(len(rankings))]
 
     per_query: list[QueryResult] = []
@@ -203,13 +212,17 @@ def evaluate_rankings(
 
     answer_scores = predictions is not None and gold_answers is not None
     if answer_scores:
-        if not (len(predictions) == len(gold_answers) == len(rankings)):  # type: ignore[arg-type]
+        preds = predictions or []
+        golds = gold_answers or []
+        if len(preds) != len(rankings) or len(golds) != len(rankings):
             raise ValueError("predictions, gold_answers and rankings must align")
-        for result, prediction, gold in zip(per_query, predictions, gold_answers):  # type: ignore[arg-type]
+        for result, prediction, gold in zip(per_query, preds, golds):
             result.prediction = prediction
             result.token_f1 = token_f1(prediction, gold)
             result.exact = exact_match(prediction, gold)
 
+    # Macro-average: every query counts the same (the standard in IR eval),
+    # so a query with several gold documents cannot outweigh a single-doc one.
     recall_agg = {
         k: mean([r.recall[k] for r in per_query]) if per_query else 0.0
         for k in k_values
