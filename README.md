@@ -97,6 +97,10 @@ char-gram,0.9167,1.0,1.0,1.0,0.7746,0.75,12
 hybrid,0.8333,1.0,1.0,0.9583,0.7965,0.75,12
 ```
 
+The same file, charted (generated from `results/metrics.csv`):
+
+![Retrieval quality by strategy: Recall@1 of 0.9167 for char-gram and 0.8333 for hybrid and BM25, with MRR of 1.0000, 0.9583 and 0.9444](figures/retrieval-by-strategy.png)
+
 ### `rageval search --explain`
 
 ```
